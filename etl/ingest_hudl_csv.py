@@ -1,176 +1,128 @@
-import os
 import csv
+import os
+from datetime import date
+from typing import Optional
+
 import psycopg2
-from psycopg2.extras import execute_batch
-
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 
-def get_connection():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not set")
-    return psycopg2.connect(DATABASE_URL)
-
-
-def get_or_create_team(cur, team_name: str):
-    cur.execute("SELECT team_id FROM teams WHERE team_name = %s", (team_name,))
-    row = cur.fetchone()
-    if row:
-        return row[0]
-
-    cur.execute(
-        "INSERT INTO teams (team_name) VALUES (%s) RETURNING team_id",
-        (team_name,)
-    )
-    return cur.fetchone()[0]
-
-
-def get_or_create_game(cur, season: int, week: int, home_team_id: int, away_team_id: int):
-    cur.execute(
-        """
-        SELECT game_id FROM games
-        WHERE season = %s AND week = %s
-          AND home_team_id = %s AND away_team_id = %s
-        """,
-        (season, week, home_team_id, away_team_id)
-    )
-    row = cur.fetchone()
-    if row:
-        return row[0]
-
-    cur.execute(
-        """
-        INSERT INTO games (season, week, home_team_id, away_team_id)
-        VALUES (%s, %s, %s, %s)
-        RETURNING game_id
-        """,
-        (season, week, home_team_id, away_team_id)
-    )
-    return cur.fetchone()[0]
-
-
-def normalize_formation(raw: str) -> str:
-    if not raw:
+def _parse_int(value):
+    if value is None or value == "":
         return None
-    f = raw.strip().lower()
-    if "trips" in f and "right" in f:
-        return "Trips Right"
-    if "trips" in f and "left" in f:
-        return "Trips Left"
-    if "double" in f:
-        return "Doubles"
-    return raw.strip().title()
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
-def load_hudl_csv(csv_path: str):
-    conn = get_connection()
-    conn.autocommit = False
+def load_hudl_csv(
+    csv_path: str,
+    offense_team_id: int,
+    defense_team_id: int,
+    game_date: Optional[date] = None,
+    season: Optional[int] = None,
+    week: Optional[int] = None,
+    venue: Optional[str] = None,
+    source: str = "Hudl",
+) -> int:
+    """
+    Ingest a Hudl-style CSV into the plays table,
+    creating a row in games and returning the new game_id.
+
+    We IGNORE any game_id column in the CSV and use the one we create.
+    """
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set!")
+
+    conn = psycopg2.connect(db_url)
     cur = conn.cursor()
 
-    plays_to_insert = []
+    # 1) Create a game record
+    cur.execute(
+        """
+        INSERT INTO games (offense_team_id, defense_team_id, game_date, season, week, venue, source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING game_id;
+        """,
+        (offense_team_id, defense_team_id, game_date, season, week, venue, source),
+    )
+    game_id = cur.fetchone()[0]
 
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+    # 2) Insert plays tied to that game
+    with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-
         for row in reader:
-            season = int(row["Season"])
-            week = int(row["Week"])
-
-            offense_team_name = row["OffenseTeam"]
-            defense_team_name = row["DefenseTeam"]
-
-            offense_team_id = get_or_create_team(cur, offense_team_name)
-            defense_team_id = get_or_create_team(cur, defense_team_name)
-
-            game_id = get_or_create_game(cur, season, week, offense_team_id, defense_team_id)
-
-            quarter = int(row["Quarter"])
-            clock = row["Clock"]
-            down = int(row["Down"])
-            distance = int(row["Distance"])
-            yard_line = int(row["YardLine"])
-            hash_mark = row["Hash"] or None
-
-            formation_raw = row["Formation"] or None
-            formation_norm = normalize_formation(formation_raw)
-            personnel = row["Personnel"] or None
-            play_type = row["PlayType"] or None
-            run_direction = row["RunDirection"] or None
-            pass_zone = row["PassZone"] or None
-            yards_gained = int(row["Yards"])
-            result = row["Result"] or None
+            drive_id = _parse_int(row.get("drive_id"))
+            quarter = _parse_int(row.get("quarter"))
+            clock = row.get("clock")
+            down = _parse_int(row.get("down"))
+            distance = _parse_int(row.get("distance"))
+            yard_line = _parse_int(row.get("yard_line"))
+            hash_mark = row.get("hash_mark")
+            formation_raw = row.get("formation_raw")
+            formation_norm = row.get("formation_norm")
+            personnel = row.get("personnel")
+            play_type = row.get("play_type")
+            run_direction = row.get("run_direction")
+            pass_zone = row.get("pass_zone")
+            yards_gained = _parse_int(row.get("yards_gained"))
+            result = row.get("result")
 
             cur.execute(
                 """
-                INSERT INTO drives (game_id, offense_team_id, defense_team_id)
-                VALUES (%s, %s, %s)
-                RETURNING drive_id
+                INSERT INTO plays (
+                    drive_id,
+                    game_id,
+                    offense_team_id,
+                    defense_team_id,
+                    quarter,
+                    clock,
+                    down,
+                    distance,
+                    yard_line,
+                    hash_mark,
+                    formation_raw,
+                    formation_norm,
+                    personnel,
+                    play_type,
+                    run_direction,
+                    pass_zone,
+                    yards_gained,
+                    result
+                )
+                VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                );
                 """,
-                (game_id, offense_team_id, defense_team_id)
+                (
+                    drive_id,
+                    game_id,
+                    offense_team_id,
+                    defense_team_id,
+                    quarter,
+                    clock,
+                    down,
+                    distance,
+                    yard_line,
+                    hash_mark,
+                    formation_raw,
+                    formation_norm,
+                    personnel,
+                    play_type,
+                    run_direction,
+                    pass_zone,
+                    yards_gained,
+                    result,
+                ),
             )
-            drive_id = cur.fetchone()[0]
-
-            plays_to_insert.append((
-                drive_id,
-                game_id,
-                offense_team_id,
-                defense_team_id,
-                quarter,
-                clock,
-                down,
-                distance,
-                yard_line,
-                hash_mark,
-                formation_raw,
-                formation_norm,
-                personnel,
-                play_type,
-                run_direction,
-                pass_zone,
-                yards_gained,
-                result,
-            ))
-
-    execute_batch(
-        cur,
-        """
-        INSERT INTO plays (
-            drive_id, game_id,
-            offense_team_id, defense_team_id,
-            quarter, clock, down, distance, yard_line, hash_mark,
-            formation_raw, formation_norm, personnel,
-            play_type, run_direction, pass_zone,
-            yards_gained, result
-        )
-        VALUES (
-            %s, %s,
-            %s, %s,
-            %s, %s, %s, %s, %s, %s,
-            %s, %s, %s,
-            %s, %s, %s,
-            %s, %s
-        )
-        """,
-        plays_to_insert,
-        page_size=100
-    )
 
     conn.commit()
     cur.close()
     conn.close()
-    print(f"Inserted {len(plays_to_insert)} plays from {csv_path}")
 
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "csv_path",
-        nargs="?",
-        default="etl/sample_data/sample_game.csv",
-        help="Path to Hudl-style CSV file"
-    )
-    args = parser.parse_args()
-
-    load_hudl_csv(args.csv_path)
+    return game_id

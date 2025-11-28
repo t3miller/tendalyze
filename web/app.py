@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+from datetime import date
 
 import pandas as pd
 import psycopg2
@@ -29,17 +30,22 @@ def get_connection():
 
 
 def get_games(conn):
-    """Return basic info for each game that has plays."""
+    """Return basic info for each game from the games table."""
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(
             """
             SELECT
                 game_id,
-                MIN(offense_team_id) AS offense_team_id,
-                MIN(defense_team_id) AS defense_team_id
-            FROM plays
-            GROUP BY game_id
-            ORDER BY game_id;
+                offense_team_id,
+                defense_team_id,
+                game_date,
+                season,
+                week,
+                venue
+            FROM games
+            ORDER BY
+                game_date DESC NULLS LAST,
+                game_id DESC;
             """
         )
         return cur.fetchall()
@@ -172,11 +178,10 @@ def main():
     )
 
     # ----- Upload tab -----
-    # ----- Upload tab -----
     with upload_tab:
         st.subheader("Upload a Hudl CSV")
 
-        # Get teams so coach can tag the game correctly
+        # Load teams
         try:
             conn = get_connection()
             with conn:
@@ -187,75 +192,79 @@ def main():
 
         if not team_lookup:
             st.info("Add teams in the Teams Admin tab before uploading games.")
-            return
+        else:
+            # Build team dropdown choices
+            team_choices = [
+                (info["label"], team_id) for team_id, info in team_lookup.items()
+            ]
+            team_choices.sort(key=lambda x: x[0])
 
-        # Build team dropdown choices
-        team_choices = [
-            (info["label"], team_id) for team_id, info in team_lookup.items()
-        ]
-        team_choices.sort(key=lambda x: x[0])
-
-        off_label = st.selectbox(
-            "Offense team", [label for label, _ in team_choices]
-        )
-        def_label = st.selectbox(
-            "Defense team", [label for label, _ in team_choices]
-        )
-
-        offense_team_id = next(
-            tid for label, tid in team_choices if label == off_label
-        )
-        defense_team_id = next(
-            tid for label, tid in team_choices if label == def_label
-        )
-
-        # Game metadata
-        from datetime import date
-
-        col_meta1, col_meta2, col_meta3 = st.columns(3)
-        with col_meta1:
-            game_date = st.date_input("Game date", value=date.today())
-        with col_meta2:
-            season = st.number_input(
-                "Season (year)", min_value=2000, max_value=2100, value=date.today().year
+            st.markdown("#### Tag this game")
+            your_label = st.selectbox(
+                "Your team", [label for label, _ in team_choices]
             )
-        with col_meta3:
-            week = st.number_input("Week", min_value=0, max_value=25, value=0)
+            opp_label = st.selectbox(
+                "Opponent team", [label for label, _ in team_choices]
+            )
 
-        venue = st.text_input("Venue (optional)", placeholder="Home stadium, city, etc.")
+            your_team_id = next(
+                tid for label, tid in team_choices if label == your_label
+            )
+            opponent_team_id = next(
+                tid for label, tid in team_choices if label == opp_label
+            )
 
-        st.markdown("---")
+            col_meta1, col_meta2, col_meta3 = st.columns(3)
+            with col_meta1:
+                game_date = st.date_input("Game date", value=date.today())
+            with col_meta2:
+                season = st.number_input(
+                    "Season (year)",
+                    min_value=2000,
+                    max_value=2100,
+                    value=date.today().year,
+                )
+            with col_meta3:
+                week = st.number_input("Week", min_value=0, max_value=25, value=0)
 
-        uploaded_file = st.file_uploader(
-            "Choose a Hudl CSV file",
-            type=["csv"],
-            help="Export play-by-play from Hudl, then drop it here.",
-            key="hudl_csv",
-        )
+            venue = st.text_input(
+                "Venue (optional)", placeholder="Home stadium, city, etc."
+            )
 
-        if uploaded_file is not None:
-            st.success(f"File selected: **{uploaded_file.name}**")
+            st.markdown("---")
 
-            if st.button("Ingest this game into Tendalyze"):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    tmp_path = tmp.name
+            uploaded_file = st.file_uploader(
+                "Choose a Hudl CSV file",
+                type=["csv"],
+                help="Export play-by-play from Hudl, then drop it here.",
+                key="hudl_csv",
+            )
 
-                try:
-                    game_id = load_hudl_csv(
-                        tmp_path,
-                        offense_team_id=offense_team_id,
-                        defense_team_id=defense_team_id,
-                        game_date=game_date,
-                        season=int(season),
-                        week=int(week),
-                        venue=venue or None,
-                    )
-                    st.success(
-                        f"Ingestion complete! ✅ Game {game_id} created and plays loaded into Neon."
-                    )
-                except Exception as e:
-                    st.error(f"Error while ingesting this file: {e}")
+            if uploaded_file is not None:
+                st.success(f"File selected: **{uploaded_file.name}**")
+
+                if st.button("Ingest this game into Tendalyze"):
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=".csv"
+                    ) as tmp:
+                        tmp.write(uploaded_file.getvalue())
+                        tmp_path = tmp.name
+
+                    try:
+                        game_id = load_hudl_csv(
+                            tmp_path,
+                            your_team_id=your_team_id,
+                            opponent_team_id=opponent_team_id,
+                            game_date=game_date,
+                            season=int(season),
+                            week=int(week),
+                            venue=venue or None,
+                        )
+                        st.success(
+                            f"Ingestion complete! ✅ Game {game_id} created and plays loaded into Neon."
+                        )
+                    except Exception as e:
+                        st.error(f"Error while ingesting this file: {e}")
 
     # ----- Game Explorer tab -----
     with explore_tab:
@@ -272,7 +281,9 @@ def main():
             team_lookup = get_team_lookup(conn)
 
         if not games:
-            st.info("No games found yet. Ingest a CSV in the Upload tab to get started.")
+            st.info(
+                "No games found yet. Ingest a CSV in the Upload tab to get started."
+            )
             return
 
         if not team_lookup:
@@ -294,10 +305,16 @@ def main():
         with col_filters[1]:
             division_filter = st.multiselect("Filter by division", divisions)
 
-        # Apply filters to games list
+        def format_team(team_id):
+            info = team_lookup.get(team_id)
+            if not info:
+                return f"Team {team_id}"
+            return info["label"]
+
+        # Apply filters to games
         def game_passes_filters(g):
-            off_info = team_lookup.get(g["offense_team_id"])
-            def_info = team_lookup.get(g["defense_team_id"])
+            your_info = team_lookup.get(g["offense_team_id"])
+            opp_info = team_lookup.get(g["defense_team_id"])
 
             def team_matches(info):
                 if not info:
@@ -306,12 +323,10 @@ def main():
                 ok_div = not division_filter or info["division"] in division_filter
                 return ok_state and ok_div
 
-            # If no filters, always pass
             if not state_filter and not division_filter:
                 return True
 
-            # Pass if either team matches the filters
-            return team_matches(off_info) or team_matches(def_info)
+            return team_matches(your_info) or team_matches(opp_info)
 
         filtered_games = [g for g in games if game_passes_filters(g)]
 
@@ -319,17 +334,23 @@ def main():
             st.info("No games match the current filters.")
             return
 
-        # Build labels like "Blue Valley NW vs Olathe North (Game 1)"
-        def format_team(team_id):
-            info = team_lookup.get(team_id)
-            if not info:
-                return f"Team {team_id}"
-            return info["label"]
+        # Build labels like "Your Team vs Opponent (Season Week, Date)"
+        game_labels = []
+        for g in filtered_games:
+            your_name = format_team(g["offense_team_id"])
+            opp_name = format_team(g["defense_team_id"])
+            label = f"{your_name} vs {opp_name} (Game {g['game_id']})"
+            meta_parts = []
+            if g["season"]:
+                meta_parts.append(str(g["season"]))
+            if g["week"] is not None:
+                meta_parts.append(f"Week {g['week']}")
+            if g["game_date"]:
+                meta_parts.append(g["game_date"].strftime("%Y-%m-%d"))
+            if meta_parts:
+                label += " - " + ", ".join(meta_parts)
+            game_labels.append(label)
 
-        game_labels = [
-            f"{format_team(g['offense_team_id'])} vs {format_team(g['defense_team_id'])} (Game {g['game_id']})"
-            for g in filtered_games
-        ]
         game_id_by_label = {
             label: g["game_id"] for label, g in zip(game_labels, filtered_games)
         }
@@ -369,7 +390,7 @@ def main():
                     pieces.append(f"Pass: {pass_row['count']}")
                 st.write(" / ".join(pieces) if pieces else "No run/pass split available.")
 
-        # Two-column layout for tables
+        # Two-column layout for tendencies
         st.markdown("### Tendencies")
         tcol1, tcol2 = st.columns(2)
 

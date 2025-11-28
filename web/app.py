@@ -3,6 +3,8 @@ import sys
 import tempfile
 
 import streamlit as st
+import psycopg2
+import psycopg2.extras
 
 # Make sure Python can find the project root (where the 'etl' package lives)
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,7 +14,102 @@ if ROOT_DIR not in sys.path:
 from etl.ingest_hudl_csv import load_hudl_csv
 
 
+def get_connection():
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set")
+    return psycopg2.connect(db_url)
+
+
 def main():
+        st.markdown("## Game Explorer")
+
+    try:
+        conn = get_connection()
+    except Exception as e:
+        st.error(f"Could not connect to database: {e}")
+        return
+
+    with conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Get list of games that have plays
+            cur.execute("SELECT DISTINCT game_id FROM plays ORDER BY game_id;")
+            game_rows = cur.fetchall()
+
+    if not game_rows:
+        st.info("No games found yet. Ingest a CSV above to get started.")
+        return
+
+    game_ids = [row["game_id"] for row in game_rows]
+    selected_game = st.selectbox("Select a game_id", game_ids)
+
+    with conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Basic counts
+            cur.execute(
+                "SELECT COUNT(*) AS plays FROM plays WHERE game_id = %s;",
+                (selected_game,)
+            )
+            total_plays = cur.fetchone()["plays"]
+
+            cur.execute(
+                """
+                SELECT play_type, COUNT(*) AS count
+                FROM plays
+                WHERE game_id = %s
+                GROUP BY play_type
+                ORDER BY count DESC;
+                """,
+                (selected_game,)
+            )
+            run_pass = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT formation_norm, COUNT(*) AS count
+                FROM plays
+                WHERE game_id = %s
+                GROUP BY formation_norm
+                ORDER BY count DESC
+                LIMIT 10;
+                """,
+                (selected_game,)
+            )
+            top_formations = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT down, AVG(yards_gained) AS avg_yards
+                FROM plays
+                WHERE game_id = %s
+                GROUP BY down
+                ORDER BY down;
+                """,
+                (selected_game,)
+            )
+            yards_by_down = cur.fetchall()
+
+    st.markdown(f"### Game {selected_game} summary")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Total plays", total_plays)
+    with col2:
+        if run_pass:
+            run_row = next((r for r in run_pass if r["play_type"].lower() == "run"), None)
+            pass_row = next((r for r in run_pass if r["play_type"].lower() == "pass"), None)
+            rp_text = []
+            if run_row:
+                rp_text.append(f"Run: {run_row['count']}")
+            if pass_row:
+                rp_text.append(f"Pass: {pass_row['count']}")
+            st.write(" / ".join(rp_text))
+
+    st.markdown("#### Top formations (by count)")
+    st.table(top_formations)
+
+    st.markdown("#### Yards per down")
+    st.table(yards_by_down)
+
     st.title("Tendalyze")
 
     st.write(

@@ -9,8 +9,10 @@ from etl.ingest_hudl_csv import load_hudl_csv
 def main():
     st.title("Tendalyze")
 
-    st.write("Upload a Hudl-style play-by-play CSV and Tendalyze will load it "
-             "into the database for use in your Tableau dashboards.")
+    st.write(
+        "Upload a Hudl-style play-by-play CSV and Tendalyze will load it "
+        "into the database for use in your Tableau dashboards."
+    )
 
     db_url = os.getenv("DATABASE_URL")
     if db_url:

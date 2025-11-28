@@ -16,6 +16,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from etl.ingest_hudl_csv import load_hudl_csv
+from etl.ingest_teams_csv import load_teams_csv
 
 
 # ---------- DB helpers ----------
@@ -131,8 +132,10 @@ def main():
     st.title("Tendalyze")
     st.write("Upload Hudl-style play-by-play and explore tendencies.")
 
-    # Tabs: Upload + Game Explorer
-    upload_tab, explore_tab = st.tabs(["📤 Upload & Ingest", "📊 Game Explorer"])
+    # Tabs: Upload + Game Explorer + Teams Admin
+    upload_tab, explore_tab, teams_tab = st.tabs(
+        ["Upload & Ingest", "Game Explorer", "Teams Admin"]
+    )
 
     # ----- Upload tab -----
     with upload_tab:
@@ -142,6 +145,7 @@ def main():
             "Choose a Hudl CSV file",
             type=["csv"],
             help="Export play-by-play from Hudl, then drop it here.",
+            key="hudl_csv",
         )
 
         if uploaded_file is not None:
@@ -154,7 +158,7 @@ def main():
 
                 try:
                     load_hudl_csv(tmp_path)
-                    st.success("Ingestion complete! Plays have been loaded into Neon. ✅")
+                    st.success("Ingestion complete! Plays have been loaded into Neon.")
                 except Exception as e:
                     st.error(f"Error while ingesting this file: {e}")
 
@@ -175,7 +179,7 @@ def main():
             st.info("No games found yet. Ingest a CSV in the Upload tab to get started.")
             return
 
-        # Build nice labels like "Game 1 (O:10 vs D:20)"
+        # Build labels like "Game 1 (O:10 vs D:20)" for now
         game_labels = [
             f"Game {g['game_id']} (O:{g['offense_team_id']} vs D:{g['defense_team_id']})"
             for g in games
@@ -249,6 +253,35 @@ def main():
             file_name=f"tendalyze_game_{selected_game}.csv",
             mime="text/csv",
         )
+
+    # ----- Teams Admin tab -----
+    with teams_tab:
+        st.subheader("Upload teams into Tendalyze")
+
+        st.write(
+            "Upload a CSV of teams with columns: "
+            "`team_name, mascot, city, state, division, region, district`."
+        )
+
+        teams_file = st.file_uploader(
+            "Choose a Teams CSV file",
+            type=["csv"],
+            key="teams_csv",
+        )
+
+        if teams_file is not None:
+            st.success(f"File selected: **{teams_file.name}**")
+
+            if st.button("Upload Teams"):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                    tmp.write(teams_file.getvalue())
+                    tmp_path = tmp.name
+
+                try:
+                    load_teams_csv(tmp_path)
+                    st.success("Teams uploaded into the database!")
+                except Exception as e:
+                    st.error(f"Error while uploading teams: {e}")
 
 
 if __name__ == "__main__":

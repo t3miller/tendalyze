@@ -175,7 +175,7 @@ def main():
     st.write("Upload Hudl-style play-by-play and explore tendencies.")
 
     # Tabs: Upload + Game Explorer + Teams Admin + Tableau
-    upload_tab, explore_tab, teams_tab, tableau_tab = st.tabs(
+upload_tab, explore_tab, teams_tab, tableau_tab = st.tabs(
         ["📤 Upload & Ingest", "📊 Game Explorer", "🏫 Teams Admin", "📈 Tableau Dashboards"]
     )
 

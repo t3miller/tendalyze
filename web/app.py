@@ -109,6 +109,40 @@ def get_game_summary(conn, game_id: int):
     return total_plays, run_pass, top_formations, yards_by_down, plays_rows
 
 
+def get_team_lookup(conn):
+    """Return a dict of team_id -> metadata (name, location, division, etc.)."""
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT team_id, team_name, city, state, division, region, district
+            FROM teams
+            ORDER BY team_name;
+            """
+        )
+        rows = cur.fetchall()
+
+    lookup = {}
+    for r in rows:
+        label = r["team_name"]
+        city = r["city"]
+        state = r["state"]
+        if city and state:
+            label += f" ({city}, {state})"
+        elif state:
+            label += f" ({state})"
+
+        lookup[r["team_id"]] = {
+            "label": label,
+            "team_name": r["team_name"],
+            "city": city,
+            "state": state,
+            "division": r["division"],
+            "region": r["region"],
+            "district": r["district"],
+        }
+    return lookup
+
+
 # ---------- Main UI ----------
 
 def main():
@@ -134,7 +168,7 @@ def main():
 
     # Tabs: Upload + Game Explorer + Teams Admin
     upload_tab, explore_tab, teams_tab = st.tabs(
-        ["Upload & Ingest", "Game Explorer", "Teams Admin"]
+        ["📤 Upload & Ingest", "📊 Game Explorer", "🏫 Teams Admin"]
     )
 
     # ----- Upload tab -----
@@ -148,6 +182,10 @@ def main():
             key="hudl_csv",
         )
 
+        st.caption(
+            "For now, make sure each CSV uses a unique game_id value so games stay separate."
+        )
+
         if uploaded_file is not None:
             st.success(f"File selected: **{uploaded_file.name}**")
 
@@ -158,7 +196,7 @@ def main():
 
                 try:
                     load_hudl_csv(tmp_path)
-                    st.success("Ingestion complete! Plays have been loaded into Neon.")
+                    st.success("Ingestion complete! Plays have been loaded into Neon. ✅")
                 except Exception as e:
                     st.error(f"Error while ingesting this file: {e}")
 
@@ -174,17 +212,70 @@ def main():
 
         with conn:
             games = get_games(conn)
+            team_lookup = get_team_lookup(conn)
 
         if not games:
             st.info("No games found yet. Ingest a CSV in the Upload tab to get started.")
             return
 
-        # Build labels like "Game 1 (O:10 vs D:20)" for now
+        if not team_lookup:
+            st.info(
+                "No teams found yet. Upload teams in the Teams Admin tab to see team names."
+            )
+
+        # Build filters from team metadata
+        states = sorted(
+            {info["state"] for info in team_lookup.values() if info["state"]}
+        )
+        divisions = sorted(
+            {info["division"] for info in team_lookup.values() if info["division"]}
+        )
+
+        col_filters = st.columns(2)
+        with col_filters[0]:
+            state_filter = st.multiselect("Filter by state", states)
+        with col_filters[1]:
+            division_filter = st.multiselect("Filter by division", divisions)
+
+        # Apply filters to games list
+        def game_passes_filters(g):
+            off_info = team_lookup.get(g["offense_team_id"])
+            def_info = team_lookup.get(g["defense_team_id"])
+
+            def team_matches(info):
+                if not info:
+                    return False
+                ok_state = not state_filter or info["state"] in state_filter
+                ok_div = not division_filter or info["division"] in division_filter
+                return ok_state and ok_div
+
+            # If no filters, always pass
+            if not state_filter and not division_filter:
+                return True
+
+            # Pass if either team matches the filters
+            return team_matches(off_info) or team_matches(def_info)
+
+        filtered_games = [g for g in games if game_passes_filters(g)]
+
+        if not filtered_games:
+            st.info("No games match the current filters.")
+            return
+
+        # Build labels like "Blue Valley NW vs Olathe North (Game 1)"
+        def format_team(team_id):
+            info = team_lookup.get(team_id)
+            if not info:
+                return f"Team {team_id}"
+            return info["label"]
+
         game_labels = [
-            f"Game {g['game_id']} (O:{g['offense_team_id']} vs D:{g['defense_team_id']})"
-            for g in games
+            f"{format_team(g['offense_team_id'])} vs {format_team(g['defense_team_id'])} (Game {g['game_id']})"
+            for g in filtered_games
         ]
-        game_id_by_label = {label: g["game_id"] for label, g in zip(game_labels, games)}
+        game_id_by_label = {
+            label: g["game_id"] for label, g in zip(game_labels, filtered_games)
+        }
 
         choice = st.selectbox("Select a game", game_labels)
         selected_game = game_id_by_label[choice]
@@ -277,12 +368,38 @@ def main():
                     tmp.write(teams_file.getvalue())
                     tmp_path = tmp.name
 
-            try:
-                inserted, skipped = load_teams_csv(tmp_path)
-                st.success(f"Teams uploaded! ✅ Inserted: {inserted}, Skipped (already existed): {skipped}")
-            except Exception as e:
-                st.error(f"Error while uploading teams: {e}")
+                try:
+                    inserted, skipped = load_teams_csv(tmp_path)
+                    st.success(
+                        f"Teams uploaded! ✅ Inserted: {inserted}, "
+                        f"Skipped (already existed): {skipped}"
+                    )
+                except Exception as e:
+                    st.error(f"Error while uploading teams: {e}")
 
+        # Show current teams
+        try:
+            conn = get_connection()
+            with conn:
+                with conn.cursor(
+                    cursor_factory=psycopg2.extras.DictCursor
+                ) as cur:
+                    cur.execute(
+                        """
+                        SELECT team_name, mascot, city, state, division, region, district
+                        FROM teams
+                        ORDER BY state, division, team_name;
+                        """
+                    )
+                    teams_rows = cur.fetchall()
+            if teams_rows:
+                st.markdown("### Teams currently in Tendalyze")
+                teams_df = pd.DataFrame(teams_rows)
+                st.dataframe(teams_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No teams in the database yet.")
+        except Exception as e:
+            st.error(f"Could not load teams: {e}")
 
 
 if __name__ == "__main__":

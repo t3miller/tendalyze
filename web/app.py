@@ -1,7 +1,13 @@
 import os
+import sys
 import tempfile
 
 import streamlit as st
+
+# Make sure Python can find the project root (where the 'etl' package lives)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from etl.ingest_hudl_csv import load_hudl_csv
 

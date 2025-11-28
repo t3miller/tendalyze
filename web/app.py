@@ -41,7 +41,8 @@ def get_games(conn):
                 game_date,
                 season,
                 week,
-                venue
+                venue,
+                source
             FROM games
             ORDER BY
                 game_date DESC NULLS LAST,
@@ -214,6 +215,9 @@ def main():
                 tid for label, tid in team_choices if label == opp_label
             )
 
+            if your_team_id == opponent_team_id:
+                st.warning("Your team and opponent should not be the same.")
+
             col_meta1, col_meta2, col_meta3 = st.columns(3)
             with col_meta1:
                 game_date = st.date_input("Game date", value=date.today())
@@ -243,7 +247,9 @@ def main():
             if uploaded_file is not None:
                 st.success(f"File selected: **{uploaded_file.name}**")
 
-                if st.button("Ingest this game into Tendalyze"):
+                disabled = your_team_id == opponent_team_id
+
+                if st.button("Ingest this game into Tendalyze", disabled=disabled):
                     with tempfile.NamedTemporaryFile(
                         delete=False, suffix=".csv"
                     ) as tmp:
@@ -286,10 +292,33 @@ def main():
             )
             return
 
-        if not team_lookup:
-            st.info(
-                "No teams found yet. Upload teams in the Teams Admin tab to see team names."
+        # ---- Games overview table ----
+        def format_team(team_id):
+            info = team_lookup.get(team_id)
+            if not info:
+                return f"Team {team_id}"
+            return info["label"]
+
+        overview_rows = []
+        for g in games:
+            overview_rows.append(
+                {
+                    "Game ID": g["game_id"],
+                    "Your team": format_team(g["offense_team_id"]),
+                    "Opponent": format_team(g["defense_team_id"]),
+                    "Season": g["season"],
+                    "Week": g["week"],
+                    "Date": g["game_date"],
+                    "Venue": g["venue"],
+                    "Source": g["source"],
+                }
             )
+
+        st.markdown("### Games overview")
+        overview_df = pd.DataFrame(overview_rows)
+        st.dataframe(overview_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
 
         # Build filters from team metadata
         states = sorted(
@@ -304,12 +333,6 @@ def main():
             state_filter = st.multiselect("Filter by state", states)
         with col_filters[1]:
             division_filter = st.multiselect("Filter by division", divisions)
-
-        def format_team(team_id):
-            info = team_lookup.get(team_id)
-            if not info:
-                return f"Team {team_id}"
-            return info["label"]
 
         # Apply filters to games
         def game_passes_filters(g):
@@ -334,7 +357,7 @@ def main():
             st.info("No games match the current filters.")
             return
 
-        # Build labels like "Your Team vs Opponent (Season Week, Date)"
+        # Build labels like "Your Team vs Opponent (Game X - meta)"
         game_labels = []
         for g in filtered_games:
             your_name = format_team(g["offense_team_id"])
@@ -355,6 +378,7 @@ def main():
             label: g["game_id"] for label, g in zip(game_labels, filtered_games)
         }
 
+        st.markdown("### Game details")
         choice = st.selectbox("Select a game", game_labels)
         selected_game = game_id_by_label[choice]
 
@@ -368,7 +392,7 @@ def main():
             ) = get_game_summary(conn, selected_game)
 
         # Metrics row
-        st.markdown("### Game summary")
+        st.markdown("#### Game summary")
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Total plays", total_plays)
@@ -391,7 +415,7 @@ def main():
                 st.write(" / ".join(pieces) if pieces else "No run/pass split available.")
 
         # Two-column layout for tendencies
-        st.markdown("### Tendencies")
+        st.markdown("#### Tendencies")
         tcol1, tcol2 = st.columns(2)
 
         with tcol1:
@@ -411,7 +435,7 @@ def main():
                 st.write("No yardage data found for this game.")
 
         # Raw plays + download
-        st.markdown("### All plays for this game")
+        st.markdown("#### All plays for this game")
         plays_df = pd.DataFrame(plays_rows)
         st.dataframe(plays_df, use_container_width=True, hide_index=True)
 

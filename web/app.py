@@ -172,18 +172,65 @@ def main():
     )
 
     # ----- Upload tab -----
+    # ----- Upload tab -----
     with upload_tab:
         st.subheader("Upload a Hudl CSV")
+
+        # Get teams so coach can tag the game correctly
+        try:
+            conn = get_connection()
+            with conn:
+                team_lookup = get_team_lookup(conn)
+        except Exception as e:
+            st.error(f"Could not load teams: {e}")
+            team_lookup = {}
+
+        if not team_lookup:
+            st.info("Add teams in the Teams Admin tab before uploading games.")
+            return
+
+        # Build team dropdown choices
+        team_choices = [
+            (info["label"], team_id) for team_id, info in team_lookup.items()
+        ]
+        team_choices.sort(key=lambda x: x[0])
+
+        off_label = st.selectbox(
+            "Offense team", [label for label, _ in team_choices]
+        )
+        def_label = st.selectbox(
+            "Defense team", [label for label, _ in team_choices]
+        )
+
+        offense_team_id = next(
+            tid for label, tid in team_choices if label == off_label
+        )
+        defense_team_id = next(
+            tid for label, tid in team_choices if label == def_label
+        )
+
+        # Game metadata
+        from datetime import date
+
+        col_meta1, col_meta2, col_meta3 = st.columns(3)
+        with col_meta1:
+            game_date = st.date_input("Game date", value=date.today())
+        with col_meta2:
+            season = st.number_input(
+                "Season (year)", min_value=2000, max_value=2100, value=date.today().year
+            )
+        with col_meta3:
+            week = st.number_input("Week", min_value=0, max_value=25, value=0)
+
+        venue = st.text_input("Venue (optional)", placeholder="Home stadium, city, etc.")
+
+        st.markdown("---")
 
         uploaded_file = st.file_uploader(
             "Choose a Hudl CSV file",
             type=["csv"],
             help="Export play-by-play from Hudl, then drop it here.",
             key="hudl_csv",
-        )
-
-        st.caption(
-            "For now, make sure each CSV uses a unique game_id value so games stay separate."
         )
 
         if uploaded_file is not None:
@@ -195,8 +242,18 @@ def main():
                     tmp_path = tmp.name
 
                 try:
-                    load_hudl_csv(tmp_path)
-                    st.success("Ingestion complete! Plays have been loaded into Neon. ✅")
+                    game_id = load_hudl_csv(
+                        tmp_path,
+                        offense_team_id=offense_team_id,
+                        defense_team_id=defense_team_id,
+                        game_date=game_date,
+                        season=int(season),
+                        week=int(week),
+                        venue=venue or None,
+                    )
+                    st.success(
+                        f"Ingestion complete! ✅ Game {game_id} created and plays loaded into Neon."
+                    )
                 except Exception as e:
                     st.error(f"Error while ingesting this file: {e}")
 

@@ -277,11 +277,12 @@ def main():
                     tmp.write(teams_file.getvalue())
                     tmp_path = tmp.name
 
-                try:
-                    load_teams_csv(tmp_path)
-                    st.success("Teams uploaded into the database!")
-                except Exception as e:
-                    st.error(f"Error while uploading teams: {e}")
+            try:
+                inserted, skipped = load_teams_csv(tmp_path)
+                st.success(f"Teams uploaded! ✅ Inserted: {inserted}, Skipped (already existed): {skipped}")
+            except Exception as e:
+                st.error(f"Error while uploading teams: {e}")
+
 
 
 if __name__ == "__main__":

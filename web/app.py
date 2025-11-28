@@ -174,9 +174,9 @@ def main():
     st.write("Upload Hudl-style play-by-play and explore tendencies.")
 
     # Tabs: Upload + Game Explorer + Teams Admin
-    upload_tab, explore_tab, teams_tab = st.tabs(
-        ["📤 Upload & Ingest", "📊 Game Explorer", "🏫 Teams Admin"]
-    )
+        upload_tab, explore_tab, teams_tab, tableau_tab = st.tabs(
+            ["📤 Upload & Ingest", "📊 Game Explorer", "🏫 Teams Admin", "📈 Tableau Dashboards"]
+        )
 
     # ----- Upload tab -----
     with upload_tab:
@@ -502,7 +502,20 @@ def main():
                 st.info("No teams in the database yet.")
         except Exception as e:
             st.error(f"Could not load teams: {e}")
+    # ----- Tableau tab -----
+    with tableau_tab:
+        st.subheader("Tableau Dashboards")
 
+        st.write(
+            "This tab embeds your Tableau workbook that reads directly from Neon. "
+            "Update the URL below once your dashboard is published."
+        )
+
+        import streamlit.components.v1 as components
+
+        tableau_url = "https://public.tableau.com/views/YOUR_WORKBOOK_NAME_HERE"
+
+        components.iframe(tableau_url, height=800)
 
 if __name__ == "__main__":
     main()

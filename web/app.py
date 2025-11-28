@@ -7,7 +7,6 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 import streamlit as st
-import streamlit.components.v1 as components
 
 # Page config must be first Streamlit call
 st.set_page_config(page_title="Tendalyze", layout="wide")
@@ -513,7 +512,10 @@ def main():
             "Update the URL below once your dashboard is published."
         )
 
+        import streamlit.components.v1 as components
+
         tableau_url = "https://public.tableau.com/views/YOUR_WORKBOOK_NAME_HERE"
+
         components.iframe(tableau_url, height=800)
 
 
